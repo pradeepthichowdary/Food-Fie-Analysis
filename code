@@ -1,0 +1,209 @@
+-- 1) How many customers have ever subscribed to Foodie-Fi?
+  
+SELECT 
+    COUNT(DISTINCT customer_id) AS total_customers
+FROM 
+    subscriptions;
+
+-- 2) What is the monthly distribution of trial plan start_date values using the start of the month?
+  
+WITH trial_plans AS (
+    SELECT 
+        plan_id 
+    FROM 
+        plans 
+    WHERE 
+        plan_name = 'trial' 
+        AND price = 0
+)
+SELECT 
+    EXTRACT(MONTH FROM start_date) AS month_number,
+    COUNT(customer_id) AS total_customers 
+FROM 
+    subscriptions 
+JOIN 
+    trial_plans ON subscriptions.plan_id = trial_plans.plan_id
+GROUP BY 
+    month_number
+ORDER BY 
+    month_number;
+
+-- 3) Show plan start_date values after 2020 with event count per plan.
+  
+SELECT 
+    subscriptions.plan_id,
+    plans.plan_name,
+    COUNT(start_date) AS total_events
+FROM 
+    subscriptions 
+JOIN 
+    plans ON subscriptions.plan_id = plans.plan_id
+WHERE 
+    EXTRACT(YEAR FROM start_date) > 2020
+GROUP BY 
+    subscriptions.plan_id, 
+    plans.plan_name
+ORDER BY 
+    subscriptions.plan_id;
+
+-- 4) Customer count and percentage of churned customers (rounded to 1 decimal).
+  
+SELECT 
+    COUNT(DISTINCT customer_id) AS total_customers,
+    COUNT(CASE WHEN plan_name = 'churn' THEN 1 END) AS churned_customers,
+    ROUND(COUNT(CASE WHEN plan_name = 'churn' THEN 1 END) * 100.0 / COUNT(DISTINCT customer_id), 1) AS churn_percentage
+FROM 
+    subscriptions 
+JOIN 
+    plans ON subscriptions.plan_id = plans.plan_id;
+
+-- 5) Customers who churned directly after their initial trial, with percentage.
+  
+WITH ranked_plans AS (
+    SELECT 
+        customer_id,
+        plan_id,
+        plan_name,
+        start_date,
+        RANK() OVER (PARTITION BY customer_id ORDER BY start_date) AS plan_rank
+    FROM 
+        subscriptions 
+)
+SELECT 
+    COUNT(CASE WHEN plan_rank = 2 AND plan_name = 'churn' THEN 1 END) AS churned_after_trial,
+    ROUND(COUNT(CASE WHEN plan_rank = 2 AND plan_name = 'churn' THEN 1 END) * 100.0 / COUNT(DISTINCT customer_id)) AS churn_percentage
+FROM 
+    ranked_plans
+JOIN 
+    plans ON ranked_plans.plan_id = plans.plan_id;
+
+-- 6) Customer plan count and percentage after the trial period.
+  
+WITH ranked_plans AS (
+    SELECT 
+        customer_id,
+        plan_id,
+        plan_name,
+        RANK() OVER (PARTITION BY customer_id ORDER BY start_date) AS plan_rank
+    FROM 
+        subscriptions
+)
+SELECT 
+    plans.plan_id,
+    plans.plan_name,
+    COUNT(plans.plan_id) AS conversion_count,
+    ROUND(CAST(COUNT(plans.plan_id) AS DECIMAL) * 100.0 / (SELECT COUNT(plan_id) FROM ranked_plans WHERE plan_rank > 1), 1) AS conversion_percentage
+FROM 
+    ranked_plans
+JOIN 
+    plans ON ranked_plans.plan_id = plans.plan_id
+WHERE 
+    plan_rank = 2
+GROUP BY 
+    plans.plan_id, 
+    plans.plan_name
+ORDER BY 
+    plans.plan_id;
+
+-- 7) Breakdown of customer count and percentage for all plan_name values as of 2020-12-31.
+  
+WITH ranked_customers AS (
+    SELECT 
+        customer_id,
+        plan_id,
+        start_date,
+        RANK() OVER (PARTITION BY customer_id ORDER BY start_date DESC) AS latest_plan
+    FROM 
+        subscriptions
+    WHERE 
+        start_date <= '2020-12-31'
+)
+SELECT 
+    plans.plan_name,
+    COUNT(plans.plan_id) AS customer_count,
+    ROUND(COUNT(plans.plan_id) * 100.0 / (SELECT COUNT(DISTINCT customer_id) FROM ranked_customers WHERE latest_plan = 1), 1) AS customer_percentage
+FROM 
+    ranked_customers
+JOIN 
+    plans ON ranked_customers.plan_id = plans.plan_id
+WHERE 
+    latest_plan = 1
+GROUP BY 
+    plans.plan_name
+ORDER BY 
+    customer_count DESC;
+
+-- 8) Customers who upgraded to an annual plan in 2020.
+  
+SELECT 
+    COUNT(DISTINCT customer_id) AS annual_plan_customers
+FROM 
+    subscriptions 
+JOIN 
+    plans ON subscriptions.plan_id = plans.plan_id
+WHERE 
+    plans.plan_name = 'pro annual' 
+    AND EXTRACT(YEAR FROM start_date) = 2020;
+
+-- 9) Average days it takes for customers to upgrade to an annual plan after joining Foodie-Fi.
+  
+WITH trial_start AS (
+    SELECT 
+        customer_id,
+        start_date AS trial_start_date
+    FROM 
+        subscriptions 
+    WHERE 
+        plan_id = 0
+),
+annual_start AS (
+    SELECT 
+        customer_id,
+        start_date AS annual_start_date
+    FROM 
+        subscriptions 
+    WHERE 
+        plan_id = 3
+)
+SELECT 
+    ROUND(AVG(DATEDIFF(annual_start_date, trial_start_date)), 0) AS avg_days_to_annual
+FROM 
+    trial_start
+JOIN 
+    annual_start ON trial_start.customer_id = annual_start.customer_id;
+
+-- 10) Breakdown of average days into 30-day periods (e.g., 1-30, 31-60 days, etc.).
+  
+WITH trial_start AS (
+    SELECT 
+        customer_id,
+        start_date AS trial_start_date
+    FROM 
+        subscriptions 
+    WHERE 
+        plan_id = 0
+),
+annual_start AS (
+    SELECT 
+        customer_id,
+        start_date AS annual_start_date
+    FROM 
+        subscriptions 
+    WHERE 
+        plan_id = 3
+),
+day_buckets AS (
+    SELECT 
+        FLOOR(DATEDIFF(annual_start_date, trial_start_date) / 30) AS days_bucket
+    FROM 
+        trial_start
+    JOIN 
+        annual_start ON trial_start.customer_id = annual_start.customer_id
+)
+SELECT 
+    CONCAT(days_bucket * 30, '-', (days_bucket + 1) * 30, ' days') AS period_range,
+    COUNT(*) AS customer_count
+FROM 
+    day_buckets
+GROUP BY 
+    days_bucket;
